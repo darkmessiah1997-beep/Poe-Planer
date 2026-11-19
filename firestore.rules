@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Jeder Raum ist ein geheimer Link. Wer die Raum-ID kennt, darf lesen und schreiben.
+    // Erlaubt sind nur die zwei Sammlungen, die der Planer benutzt, mit höchstens 40 Feldern pro Dokument.
+    match /rooms/{room}/{coll}/{docId} {
+      allow read: if room.size() >= 16 && coll in ['chars', 'meta'];
+      allow delete: if room.size() >= 16 && coll in ['chars', 'meta'];
+      allow create, update: if room.size() >= 16
+                            && coll in ['chars', 'meta']
+                            && request.resource.data.size() < 40;
+    }
+  }
+}

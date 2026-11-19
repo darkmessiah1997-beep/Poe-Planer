@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:dark;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<script>
+/* Speicher-Brücke: die Seite fragt nach "db", Firebase liefert sie (oder null = nur lokal). */
+window.__dbReady=new Promise(function(r){window.__resolveDb=r;setTimeout(function(){r(null);},10000);});
+window.claude={use:function(n){return n==="db"?window.__dbReady:Promise.resolve(null);}};
+</script>
+<script src="config.js"></script>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {initializeFirestore,collection,doc,onSnapshot,setDoc,deleteDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+const cfg=window.FIREBASE_CONFIG;
+function roomId(){
+  const m=location.hash.match(/^#raum-([a-z0-9]{16,64})$/);
+  if(m)return m[1];
+  const a=new Uint8Array(12);crypto.getRandomValues(a);
+  const id=Array.from(a,b=>b.toString(36).padStart(2,"0")).join("").slice(0,20);
+  history.replaceState(null,"","#raum-"+id);
+  return id;
+}
+if(!cfg||!cfg.projectId||cfg.projectId.indexOf("DEIN")>=0){window.__resolveDb(null);}
+else{
+  try{
+    const fs=initializeFirestore(initializeApp(cfg),{ignoreUndefinedProperties:true});
+    const R=roomId();window.__room=R;
+    const err=e=>({code:e&&e.code==="permission-denied"?"invalid_argument":"unavailable",message:String(e&&e.message||e)});
+    const wrap=s=>({id:s.id,exists:s.exists(),data:()=>s.data(),metadata:s.metadata});
+    const ref=parts=>{const r=doc(fs,"rooms",R,...parts);return{
+      id:r.id,path:r.path,
+      set:d=>setDoc(r,d).catch(e=>{throw err(e);}),
+      update:d=>setDoc(r,d,{merge:true}).catch(e=>{throw err(e);}),
+      delete:()=>deleteDoc(r).catch(e=>{throw err(e);}),
+      onSnapshot:(n,e)=>onSnapshot(r,s=>n(wrap(s)),x=>e&&e(err(x)))};};
+    window.__resolveDb({
+      doc:p=>ref(p.split("/")),
+      collection:c=>({doc:id=>ref([c,id]),onSnapshot:(n,e)=>onSnapshot(collection(fs,"rooms",R,c),s=>n({docs:s.docs.map(wrap),size:s.size,empty:s.empty,metadata:s.metadata}),x=>e&&e(err(x)))})
+    });
+    document.addEventListener("DOMContentLoaded",showShare);if(document.readyState!=="loading")showShare();
+  }catch(e){console.error(e);window.__resolveDb(null);}
+}
+function showShare(){
+  const b=document.getElementById("share");if(!b)return;b.hidden=false;
+  b.onclick=()=>{const u=location.href;const done=()=>{b.textContent="Link kopiert";setTimeout(()=>b.textContent="Raum-Link kopieren",2000);};
+    if(navigator.clipboard)navigator.clipboard.writeText(u).then(done,()=>prompt("Link kopieren:",u));else prompt("Link kopieren:",u);};
+}
+</script>
+<title>PoE Endgame-Planer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya+SC:wght@500;700&family=Alegreya+Sans:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a stash-tab workbench — inventory paper-doll on the left, the character sheet of wanted items and gems on the right; editors open as an item-tooltip styled sheet. Deliberately dark, single theme. */
+:root{
+  color-scheme:dark;
+  --bg:#110f0d;
+  --panel:#1a1714;
+  --panel2:#221e1a;
+  --line:#3b3229;
+  --line-soft:#2a241f;
+  --fg:#ddd3c4;
+  --muted:#968a7a;
+  --unique:#d07532;
+  --rare:#e9d670;
+  --magic:#8f8fff;
+  --craft:#b3d4ef;
+  --gem:#2fb3a9;
+  --gem-r:#d4574e;
+  --gem-g:#6fbf5a;
+  --gem-b:#5f8fe0;
+  --ok:#78b46a;
+  --offer:#5fb8d8;
+  --miss:#c9643c;
+  --focus:#e9d670;
+  --f-display:"Alegreya SC",Georgia,"Times New Roman",serif;
+  --f-body:"Alegreya Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--fg)}
+body{font-family:var(--f-body);font-size:15px;line-height:1.45}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wrap{max-width:1480px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:18px 48px}
+
+/* header */
+header.top{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 24px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.brand h1{font-family:var(--f-display);font-weight:700;font-size:28px;letter-spacing:.02em;margin:0;color:var(--unique);line-height:1.1}
+.brand p{margin:2px 0 0;color:var(--muted);font-size:13.5px}
+.sync{margin-left:auto;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.sync i{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+.sync.live i{background:var(--ok)}
+.sync.warn i{background:var(--miss)}
+
+/* char tabs */
+.chars{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px}
+.chartab{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:7px 12px;display:flex;flex-direction:column;align-items:flex-start;min-width:0;text-align:left}
+.chartab b{font-family:var(--f-display);font-weight:500;font-size:16px;line-height:1.15}
+.chartab small{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.chartab[aria-selected="true"]{border-color:var(--rare);background:var(--panel2)}
+.chartab[aria-selected="true"] b{color:var(--rare)}
+.addchar{background:transparent;border:1px dashed var(--line);color:var(--muted);border-radius:3px;padding:7px 14px}
+.addchar:hover{color:var(--fg);border-color:var(--muted)}
+
+/* main grid */
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:18px;align-items:start}
+@media (max-width:1000px){.cols{grid-template-columns:minmax(0,1fr)}}
+.col{background:#15130f;border:1px solid var(--line);border-radius:4px;padding:16px;min-width:0}
+.col+.col .pname{color:var(--craft)}
+.player{display:flex;flex-direction:column;gap:2px;padding-bottom:10px;border-bottom:1px solid var(--line-soft)}
+.pnum{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.pname{background:transparent;border:0;border-bottom:1px dashed transparent;font-family:var(--f-display);font-weight:700;font-size:26px;color:var(--rare);padding:0;min-width:0;width:100%}
+.pname:hover,.pname:focus{border-bottom-color:var(--line)}
+.pname::placeholder{color:var(--muted);font-weight:500}
+.col{container-type:inline-size}
+.board{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
+.dollwrap{max-width:460px;width:100%;margin:0 auto}
+@container (min-width:600px){
+  .board{grid-template-columns:minmax(0,1fr) minmax(230px,270px)}
+  .board .detail{margin-top:0;position:sticky;top:12px}
+}
+.col .items{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.col section{margin-top:24px}
+.sheethead{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin-bottom:12px}
+.sheethead input{background:transparent;border:0;border-bottom:1px solid var(--line);font-family:var(--f-display);font-size:22px;color:var(--fg);padding:2px 0;min-width:0;flex:1 1 200px}
+.sheethead input.sub{font-family:var(--f-body);font-size:14px;color:var(--muted);flex:1 1 160px}
+.progress{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;width:100%}
+.bar{height:4px;background:var(--line-soft);border-radius:2px;margin-top:5px;overflow:hidden}
+.bar span{display:block;height:100%;background:var(--ok);transition:width .3s}
+
+/* paper doll */
+.doll{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));grid-template-rows:repeat(6,minmax(0,1fr));aspect-ratio:8/6.3;gap:5px;max-width:100%;
+  grid-template-areas:"w w . h h a o o" "w w . h h . o o" "w w r1 b b r2 o o" "w w . b b . o o" "g g . b b . t t" "g g . e e . t t";
+  background:radial-gradient(ellipse at 50% 40%,#1f1b17,#141210 70%);border:1px solid var(--line);padding:10px;border-radius:4px}
+.flasks{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin-top:6px;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:#141210}
+.flasks .slot{aspect-ratio:1/1.6}
+.slot{position:relative;background:rgba(0,0,0,.35);border:1px solid var(--line-soft);border-radius:2px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:3px;min-width:0;min-height:0;overflow:hidden}
+.slot:hover{border-color:var(--muted)}
+.slot .lab{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);line-height:1.1}
+.slot .nm{font-family:var(--f-display);font-size:12.5px;line-height:1.1;margin-top:2px;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.slot.empty .lab::after{content:"+";display:block;font-size:16px;margin-top:2px;color:var(--line)}
+.slot.u{border-color:color-mix(in srgb,var(--unique) 55%,transparent);background:color-mix(in srgb,var(--unique) 9%,rgba(0,0,0,.4))}
+.slot.u .nm{color:var(--unique)}
+.slot.rr{border-color:color-mix(in srgb,var(--rare) 45%,transparent);background:color-mix(in srgb,var(--rare) 6%,rgba(0,0,0,.4))}
+.slot.rr .nm{color:var(--rare)}
+.slot .dot{position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--miss)}
+.slot .dot.have{background:var(--ok)}
+.jlabel{margin-top:10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.jewels{margin-top:5px;display:flex;flex-wrap:wrap;gap:5px}
+.jewels .slot{width:62px;height:62px}
+.jewels .addj{min-width:62px;padding:0 10px;height:62px;border:1px dashed var(--line);background:transparent;color:var(--muted);border-radius:2px;font-size:11px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:10px;flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:7px;height:7px;border-radius:50%;display:inline-block}
+
+/* section heads */
+h2{font-family:var(--f-display);font-weight:500;font-size:19px;margin:0 0 10px;color:var(--fg);letter-spacing:.02em;display:flex;align-items:baseline;gap:10px}
+h2 small{font-family:var(--f-body);font-size:12.5px;color:var(--muted);font-weight:400}
+section+section{margin-top:28px}
+
+/* item list (tooltips) */
+.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.tip{background:#0b0a09;border:1px solid var(--line);border-radius:2px;display:flex;flex-direction:column;min-width:0}
+.tip header{padding:7px 10px 6px;text-align:center;border-bottom:1px solid var(--line-soft);position:relative}
+.tip .slotname{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.tip .iname{font-family:var(--f-display);font-size:16px;line-height:1.15;margin-top:1px}
+.tip .ibase{font-family:var(--f-display);font-size:14px;line-height:1.15}
+.tip.u{border-color:color-mix(in srgb,var(--unique) 50%,var(--line))}
+.tip.u .iname,.tip.u .ibase{color:var(--unique)}
+.tip.rr{border-color:color-mix(in srgb,var(--rare) 40%,var(--line))}
+.tip.rr .iname,.tip.rr .ibase{color:var(--rare)}
+.tip .inf{font-size:11px;color:var(--muted);margin-top:2px}
+.tip ul{list-style:none;margin:0;padding:8px 10px;display:flex;flex-direction:column;gap:2px;text-align:center}
+.tip li{color:var(--magic);font-size:13.5px;line-height:1.3}
+.tip li.c{color:var(--craft)}
+.tip li.x{color:var(--fg);font-style:italic}
+.tip li .tag{font-family:var(--f-mono);font-size:10px;color:var(--muted);margin-right:5px;vertical-align:1px}
+.slot.selected{outline:2px solid var(--rare);outline-offset:1px}
+.detail{margin-top:12px}
+.detail .tip{max-width:100%}
+.detail .tip footer{flex-wrap:wrap}
+.detail .tip footer .seg{flex:1 1 100%;display:flex}
+.detail .tip footer .seg button{flex:1;padding:6px 4px}
+.slot.sm .lab{font-size:9px;letter-spacing:.02em}
+.slot.sm .nm{font-size:10.5px}
+.dhint{border:1px dashed var(--line);border-radius:3px;padding:10px 12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.seg button{background:transparent;border:0;padding:5px 10px;font-size:13px;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[data-st="need"][aria-pressed="true"]{background:color-mix(in srgb,var(--miss) 22%,transparent);color:var(--fg)}
+.seg button[data-st="offer"][aria-pressed="true"]{background:color-mix(in srgb,var(--offer) 26%,transparent);color:var(--fg)}
+.seg button[data-st="have"][aria-pressed="true"]{background:color-mix(in srgb,var(--ok) 24%,transparent);color:var(--fg)}
+.slot .dot.offer,.status.offer i{background:var(--offer)}
+.status.have i{background:var(--ok)}
+.pill{display:inline-block;font-size:11px;border:1px solid color-mix(in srgb,var(--offer) 60%,transparent);color:var(--offer);border-radius:9px;padding:0 7px;margin-right:6px;vertical-align:1px}
+.check li.offer input{accent-color:var(--offer)}
+.check{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.check li{display:grid;grid-template-columns:20px minmax(0,1fr) auto;grid-template-areas:"c n b" ". s b" ". q b";column-gap:10px;row-gap:1px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--line-soft);background:#0e0d0c}
+.check li:last-child{border-bottom:0}
+.check input{grid-area:c;width:16px;height:16px;accent-color:var(--ok);margin:0}
+.check .ckn{grid-area:n;font-family:var(--f-display);font-size:15px;cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.check .ckn.u{color:var(--unique)}.check .ckn.rr{color:var(--rare)}
+.check .cks{grid-area:s;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.check .ckq{grid-area:q;font-size:12.5px;color:#b9ad9b;line-height:1.3;min-width:0}
+.check .ckq.legacy{color:var(--miss)}
+.check .ckb{grid-area:b;padding:3px 9px;font-size:12px}
+.check li.done .ckn{text-decoration:line-through;text-decoration-color:var(--ok);opacity:.7}
+.check li.done .ckq{opacity:.6}
+.ovw{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.ov{display:grid;grid-template-columns:10px 92px minmax(0,1fr);grid-template-areas:"d s n" ". . q";column-gap:10px;row-gap:1px;align-items:baseline;text-align:left;background:#0e0d0c;border:0;border-bottom:1px solid var(--line-soft);padding:7px 10px}
+.ov:last-child{border-bottom:0}
+.ov:hover{background:var(--panel2)}
+.ov .dot{grid-area:d;width:8px;height:8px;border-radius:50%;background:var(--miss);align-self:center}
+.ov .dot.have{background:var(--ok)}
+.ov .ovs{grid-area:s;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ov .ovn{grid-area:n;font-family:var(--f-display);font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ov.u .ovn{color:var(--unique)}.ov.rr .ovn{color:var(--rare)}
+.ov .ovq{grid-area:q;font-size:12.5px;color:#b9ad9b;line-height:1.3;min-width:0}
+.ov .ovq.legacy{color:var(--miss)}
+@media (max-width:480px){.ov{grid-template-columns:10px minmax(0,1fr);grid-template-areas:"d s" ". n" ". q"}}
+.tip .src{padding:6px 10px 8px;font-size:12.5px;color:var(--fg);text-align:center;border-top:1px dashed var(--line-soft);line-height:1.35}
+.tip .src span{display:block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:1px}
+.tip .src.legacy{color:var(--miss)}
+.list .it .lsrc{display:block;font-size:12px;color:#b9ad9b;line-height:1.3}
+.list .it .lsrc.legacy{color:var(--miss)}
+.tip .note{padding:0 10px 8px;font-size:13px;color:var(--muted);text-align:center}
+.tip footer{margin-top:auto;display:flex;gap:6px;padding:7px 8px;border-top:1px solid var(--line-soft)}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:5px 10px;font-size:13px;color:var(--fg)}
+.btn:hover{border-color:var(--muted)}
+.btn.pri{border-color:var(--rare);color:var(--rare)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--miss)}
+.status{display:inline-flex;align-items:center;gap:6px}
+.status i{width:8px;height:8px;border-radius:50%;background:var(--miss)}
+.status.have i{background:var(--ok)}
+.empty-note{border:1px dashed var(--line);padding:16px;color:var(--muted);font-size:14px;border-radius:3px}
+
+/* gems */
+.groups{display:flex;flex-direction:column;gap:10px}
+.group{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:10px 12px}
+.ghead{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.ghead input{background:transparent;border:0;border-bottom:1px solid var(--line-soft);font-family:var(--f-display);font-size:16px;flex:1 1 140px;min-width:0;padding:2px 0}
+.ghead select{background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:3px 6px;font-size:13px}
+.links{display:flex;flex-wrap:wrap;gap:6px}
+.gem{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#0e0d0c;border-radius:14px;padding:3px 6px 3px 8px;font-size:13.5px;max-width:100%}
+.gem .sock{width:11px;height:11px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 2px rgba(0,0,0,.45)}
+.sock.r{background:var(--gem-r)}.sock.g{background:var(--gem-g)}.sock.b{background:var(--gem-b)}.sock.w{background:#ddd}
+.gem .gn{color:var(--gem);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gem.sup .gn{color:#9fc8c4}
+.gem button{background:transparent;border:0;padding:0 3px;color:var(--muted);font-size:13px;line-height:1}
+.gem .st{width:9px;height:9px;border-radius:50%;background:var(--miss);border:0;padding:0}
+.gem .st.have{background:var(--ok)}
+.addgem{border:1px dashed var(--line);background:transparent;color:var(--muted);border-radius:14px;padding:3px 10px;font-size:13px}
+
+/* modal */
+.scrim{position:fixed;inset:0;background:rgba(5,4,3,.72);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:max(24px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) 24px max(12px,env(safe-area-inset-left,0px));overflow-y:auto}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:4px;width:min(980px,100%);display:flex;flex-direction:column;min-width:0}
+.sheet>header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.sheet>header h3{font-family:var(--f-display);font-weight:500;font-size:20px;margin:0;flex:1;min-width:0}
+.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line-soft)}
+.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;padding:6px 12px;color:var(--muted);font-family:var(--f-display);font-size:15px}
+.tabs button[aria-selected="true"]{color:var(--rare);border-bottom-color:var(--rare)}
+.sheet .body{padding:14px 16px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,300px);gap:18px}
+@media (max-width:760px){.sheet .body{grid-template-columns:minmax(0,1fr)}}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field label,.lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.inp{background:#0e0d0c;border:1px solid var(--line);border-radius:3px;padding:7px 9px;width:100%;min-width:0}
+textarea.inp{resize:vertical;min-height:54px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.list{border:1px solid var(--line-soft);border-radius:3px;max-height:340px;overflow-y:auto;background:#0e0d0c}
+.list .it{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line-soft);padding:6px 9px;font-size:14px}
+.list .it:hover,.list .it.sel{background:var(--panel2)}
+.list .it small{color:var(--muted);font-size:12px}
+.list .it .u{color:var(--unique);font-family:var(--f-display)}
+.list .it .rp{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--craft);border:1px solid color-mix(in srgb,var(--craft) 40%,transparent);border-radius:2px;padding:0 4px;margin-left:6px}
+.list .none{padding:10px;color:var(--muted);font-size:13.5px}
+.chip{border:1px solid var(--line);background:transparent;border-radius:12px;padding:3px 10px;font-size:13px;color:var(--muted)}
+.chip[aria-pressed="true"]{border-color:var(--rare);color:var(--rare);background:color-mix(in srgb,var(--rare) 8%,transparent)}
+.affix{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+@media (max-width:560px){.affix{grid-template-columns:minmax(0,1fr)}}
+.affix h4{margin:0 0 5px;font-family:var(--f-display);font-weight:500;font-size:15px;display:flex;justify-content:space-between}
+.affix h4 small{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.mod{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line-soft);padding:5px 8px;font-size:13px;color:var(--magic);line-height:1.3}
+.mod:hover{background:var(--panel2)}
+.mod small{display:block;color:var(--muted);font-family:var(--f-mono);font-size:11px}
+.mod.on{background:color-mix(in srgb,var(--magic) 10%,transparent)}
+.picked{display:flex;flex-direction:column;gap:6px}
+.pk{border:1px solid var(--line-soft);border-radius:3px;padding:6px 8px;background:#0e0d0c;display:flex;flex-direction:column;gap:5px}
+.pk .t{color:var(--magic);font-size:13.5px}
+.pk.c .t{color:var(--craft)}
+.pk.x .t{color:var(--fg)}
+.pk select{background:var(--panel2);border:1px solid var(--line);border-radius:3px;font-size:12px;padding:2px 4px;max-width:100%;font-family:var(--f-mono)}
+.counts{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.counts .over{color:var(--miss)}
+.sheet footer{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--line)}
+.preview{position:sticky;top:0}
+details.crafted summary{cursor:pointer;color:var(--craft);font-size:13.5px;padding:4px 0}
+.hint{font-size:12.5px;color:var(--muted)}
+.banner{border:1px solid var(--line);background:var(--panel);padding:10px 14px;border-radius:3px;font-size:13.5px;color:var(--muted);margin-bottom:14px}
+.loading{padding:40px 0;color:var(--muted)}
+.confirm{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--miss)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+
+<div class="wrap" id="app">
+  <header class="top">
+    <div class="brand">
+      <h1>PoE Endgame-Planer</h1>
+      <p>Was eure Endgame-Chars noch brauchen. Uniques, Replicas, Rares mit Wunsch-Mods und Gems.</p>
+    </div>
+    <div class="sync" id="sync"><button class="btn" id="share" hidden>Raum-Link kopieren</button><i></i><span>Lädt…</span></div>
+  </header>
+  <div id="root"><div class="loading">Item-Daten werden geladen…</div></div>
+</div>
+<div id="modal"></div>
+
+<script>
+(function(){
+"use strict";
+/* ---------- constants ---------- */
+const SLOTS=[
+  {k:"weapon",n:"Waffe",a:"w",type:"weapon"},
+  {k:"offhand",n:"Nebenhand",a:"o",type:"offhand"},
+  {k:"helm",n:"Helm",a:"h",type:"helm"},
+  {k:"amulet",n:"Amulett",a:"a",type:"amulet"},
+  {k:"body",n:"Brust",a:"b",type:"body"},
+  {k:"ring1",n:"Ring L",a:"r1",type:"ring"},
+  {k:"ring2",n:"Ring R",a:"r2",type:"ring"},
+  {k:"gloves",n:"Handschuhe",a:"g",type:"gloves"},
+  {k:"belt",n:"Gürtel",a:"e",type:"belt"},
+  {k:"boots",n:"Stiefel",a:"t",type:"boots"},
+  {k:"flask1",n:"Flask 1",type:"flask"},{k:"flask2",n:"Flask 2",type:"flask"},{k:"flask3",n:"Flask 3",type:"flask"},{k:"flask4",n:"Flask 4",type:"flask"},{k:"flask5",n:"Flask 5",type:"flask"}
+];
+const SLOTMAP=Object.fromEntries(SLOTS.map(s=>[s.k,s]));
+const INF=[["shaper","Shaper"],["elder","Elder"],["crusader","Crusader"],["eyrie","Redeemer"],["basilisk","Hunter"],["adjudicator","Warlord"]];
+const INFNAME=Object.fromEntries(INF);
+const GROUPLOC=[["","– Ort –"],["body","Brust"],["helm","Helm"],["gloves","Handschuhe"],["boots","Stiefel"],["weapon","Waffe"],["offhand","Nebenhand"],["ring","Ring"],["amulet","Amulett"]];
+
+/* ---------- state ---------- */
+const S={data:null,chars:[],sel:{p1:null,p2:null},view:{p1:null,p2:null},players:{p1:"",p2:""},db:null,mode:"loading",readonly:false,local:false};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+const norm=s=>String(s||"").toLowerCase().replace(/['’`´]/g,"");
+const words=s=>norm(s).split(/[^a-z0-9äöüß]+/).filter(Boolean);
+function lev(a,b,max){
+  if(Math.abs(a.length-b.length)>max)return max+1;
+  let prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){const cur=[i];let best=i;
+    for(let j=1;j<=b.length;j++){cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));if(cur[j]<best)best=cur[j];}
+    if(best>max)return max+1;prev=cur;}
+  return prev[b.length];
+}
+/* every typed word must appear in the text, or be a near-miss of one of its words (typos ok) */
+function fuzzy(q,text){
+  const qw=words(q);if(!qw.length)return 2;
+  const t=norm(text);const tw=words(text);let exact=true;
+  for(const w of qw){
+    if(t.includes(w))continue;
+    exact=false;
+    if(w.length<4)return 0;
+    const max=w.length>=7?2:1;
+    if(!tw.some(h=>lev(w,h,max)<=max||(h.length>w.length&&lev(w,h.slice(0,w.length),max)<=max)))return 0;
+  }
+  return exact?2:1;
+}
+
+function setSync(state,text){const el=$("#sync");el.className="sync "+(state||"");el.querySelector("span").textContent=text;}
+
+/* ---------- data ---------- */
+async function loadData(){
+  const [b,m,u,g,cl]=await Promise.all(["data/bases.json","data/mods.json","data/uniques.json","data/gems.json","data/clusters.json"].map(p=>fetch(p).then(r=>{if(!r.ok)throw new Error(p);return r.json();})));
+  const bases=b.bases.map(x=>({n:x[0],t:x[1],st:x[2],s:x[3],tags:x[4],inf:x[5],lvl:x[6]}));
+  const baseBy=Object.fromEntries(bases.map(x=>[x.n,x]));
+  S.data={uniqueBy:Object.fromEntries(u.map(x=>[x.n,x])),clusters:cl,bases,baseBy,groups:m.groups,W:m.W,crafted:m.crafted,uniques:u,gems:g,gemBy:Object.fromEntries(g.map(x=>[x.n,x]))};
+}
+
+/* ---------- storage ---------- */
+const PK=["p1","p2"];
+let deferRender=false;
+document.addEventListener('focusout',e=>{if(deferRender&&e.target.matches&&e.target.matches('#root input, #root textarea')){setTimeout(()=>{const a=document.activeElement;if(a&&a.matches&&a.matches('#root input, #root textarea'))return;deferRender=false;finishLoad();},50);}});
+function loadView(){try{const v=JSON.parse(localStorage.getItem("poe-planer-view")||"{}");if(v&&typeof v==="object")S.view=Object.assign(S.view,v);}catch(e){}}
+function saveView(){try{localStorage.setItem("poe-planer-view",JSON.stringify(S.view));}catch(e){}}
+function onRemote(){
+  const a=document.activeElement;
+  if(S.mode==="ready"&&a&&a.matches&&a.matches("#root input, #root textarea")){deferRender=true;refreshTabs();return;}
+  finishLoad();
+}
+async function initStore(){
+  loadView();
+  let db=null;
+  try{ if(window.claude&&window.claude.use) db=await window.claude.use("db"); }catch(e){db=null;}
+  if(!db){
+    S.local=true;
+    try{const raw=localStorage.getItem("poe-planer-local");S.chars=raw?JSON.parse(raw):[];}catch(e){S.chars=[];}
+    try{const raw=localStorage.getItem("poe-planer-players");if(raw)S.players=JSON.parse(raw);}catch(e){}
+    setSync("warn","Nur lokal, nicht geteilt");
+    finishLoad();return;
+  }
+  S.db=db;
+  let got=false;
+  const timer=setTimeout(()=>{ if(!got){setSync("warn","Verbindung dauert…"); finishLoad();} },10000);
+  db.collection("chars").onSnapshot(snap=>{
+    got=true;
+    if(!snap.metadata.fromCache){clearTimeout(timer);setSync("live","Live geteilt");}
+    S.chars=snap.docs.map(d=>Object.assign({id:d.id},JSON.parse(JSON.stringify(d.data()||{}))));
+    onRemote();
+  },err=>{clearTimeout(timer);setSync("warn","Speicher nicht erreichbar");finishLoad();});
+  db.doc("meta/players").onSnapshot(snap=>{
+    if(snap.exists){const d=snap.data()||{};S.players={p1:String(d.p1||""),p2:String(d.p2||"")};onRemote();}
+  },()=>{});
+}
+function playerOf(c){return c.player==="p2"?"p2":"p1";}
+function charsOf(pk){return S.chars.filter(c=>playerOf(c)===pk);}
+function finishLoad(){
+  S.chars.sort((a,b)=>(a.created||0)-(b.created||0));
+  PK.forEach(pk=>{const own=charsOf(pk);if(!own.find(c=>c.id===S.view[pk]))S.view[pk]=own[0]?own[0].id:null;});
+  S.mode="ready";render();
+}
+function viewChar(pk){return S.chars.find(c=>c.id===S.view[pk])||null;}
+function saveLocal(){try{localStorage.setItem("poe-planer-local",JSON.stringify(S.chars));}catch(e){}}
+
+/* one write at a time per doc */
+const queue={};
+function writeChar(ch,patch,full){
+  if(S.readonly)return;
+  Object.assign(ch,patch);ch.updated=Date.now();
+  if(S.local){saveLocal();return;}
+  const id=ch.id;
+  queue[id]=queue[id]||Promise.resolve();
+  const body=full?stripId(ch):Object.assign({},patch,{updated:ch.updated});
+  queue[id]=queue[id].then(()=> (full?S.db.collection("chars").doc(id).set(body):S.db.collection("chars").doc(id).update(body)) ).catch(e=>{
+    if(e&&e.code==="invalid_argument"&&!full){ return S.db.collection("chars").doc(id).set(stripId(ch)).catch(handleWriteErr); }
+    handleWriteErr(e);
+  });
+}
+let playerQ=Promise.resolve();
+function writePlayers(){
+  if(S.readonly)return;
+  if(S.local){try{localStorage.setItem("poe-planer-players",JSON.stringify(S.players));}catch(e){}return;}
+  const body={p1:S.players.p1,p2:S.players.p2};
+  playerQ=playerQ.then(()=>S.db.doc("meta/players").set(body)).catch(handleWriteErr);
+}
+function stripId(ch){const o=Object.assign({},ch);delete o.id;return o;}
+function handleWriteErr(e){
+  if(e&&e.code==="invalid_argument"){S.readonly=true;setSync("warn","Nur lesen");render();}
+  else if(e&&e.code==="quota_exceeded"){alertBar("Speicher voll. Lösch alte Charaktere, dann klappt es wieder.");}
+  else setSync("warn","Speichern fehlgeschlagen");
+}
+function alertBar(t){const r=$("#root");const d=document.createElement("div");d.className="banner";d.textContent=t;r.prepend(d);}
+function deleteChar(ch){
+  const pk=playerOf(ch);
+  S.chars=S.chars.filter(c=>c.id!==ch.id);
+  const own=charsOf(pk);S.view[pk]=own[0]?own[0].id:null;saveView();
+  if(S.local)saveLocal();else S.db.collection("chars").doc(ch.id).delete().catch(handleWriteErr);
+  render();
+}
+function newChar(pk){
+  const ch={id:uid(),player:pk,name:"Neuer Charakter",build:"",created:Date.now(),slots:{},jewels:[],gemGroups:[]};
+  S.chars.push(ch);S.view[pk]=ch.id;saveView();
+  writeChar(ch,{},true);render();
+  setTimeout(()=>{const i=document.querySelector(`[data-col="${pk}"] .cname`);if(i){i.focus();i.select();}},30);
+}
+
+/* ---------- progress ---------- */
+function itemsOf(ch){
+  const out=[];
+  SLOTS.forEach(s=>{const it=ch.slots&&ch.slots[s.k];if(it)out.push({key:s.k,label:s.n,it});});
+  (ch.jewels||[]).forEach((it,i)=>out.push({key:"jewel:"+i,label:jewelLabel(it)+" "+(i+1),it}));
+  return out;
+}
+function progress(ch){
+  const its=itemsOf(ch);let tot=its.length,have=its.filter(x=>x.it.have).length;
+  (ch.gemGroups||[]).forEach(g=>(g.gems||[]).forEach(x=>{tot++;if(x.have)have++;}));
+  return {tot,have};
+}
+
+/* ---------- render ---------- */
+function render(){
+  const root=$("#root");
+  if(S.mode!=="ready"){return;}
+  let h="";
+  if(S.readonly) h+=`<div class="banner">Speichern wurde von Firebase abgelehnt. Prüf die Firestore-Regeln und ob der Raum-Link vollständig ist.</div>`;
+  if(S.local) h+=`<div class="banner">Firebase ist noch nicht eingerichtet (config.js). Einträge bleiben nur in diesem Browser.</div>`;
+  h+=`<div class="legend"><span><i style="background:var(--miss)"></i>fehlt noch</span><span><i style="background:var(--offer)"></i>Kumpel hat's</span><span><i style="background:var(--ok)"></i>liegt bereit</span><span><i style="background:var(--unique)"></i>Unique</span><span><i style="background:var(--rare)"></i>Rare</span></div>`;
+  h+=`<div class="cols">`;
+  PK.forEach((pk,i)=>{h+=`<div class="col" data-col="${pk}">${colHtml(pk,i)}</div>`;});
+  h+=`</div>`;
+  root.innerHTML=h;
+  PK.forEach(pk=>bindCol(document.querySelector(`[data-col="${pk}"]`),pk));
+}
+function tabLabel(c){const p=progress(c);return `<b>${esc(c.name||"Ohne Namen")}</b><small>${esc(c.build||"–")} · ${p.have}/${p.tot}</small>`;}
+function colHtml(pk,i){
+  const ro=S.readonly;
+  const pname=S.players[pk]||"";
+  let h=`<div class="player"><span class="pnum">Spieler ${i+1}</span><input class="pname" aria-label="Name Spieler ${i+1}" placeholder="${i===0?"Dein Name":"Name deines Kumpels"}" value="${esc(pname)}" ${ro?"readonly":""}></div>`;
+  h+=`<nav class="chars" role="tablist" aria-label="Charaktere von ${esc(pname||"Spieler "+(i+1))}">`;
+  charsOf(pk).forEach(c=>{h+=`<button class="chartab" role="tab" aria-selected="${c.id===S.view[pk]}" data-char="${esc(c.id)}">${tabLabel(c)}</button>`;});
+  if(!ro) h+=`<button class="addchar">+ Charakter</button>`;
+  h+=`</nav>`;
+  const ch=viewChar(pk);
+  if(!ch){
+    h+=`<div class="empty-note">${esc(pname||"Dieser Spieler")} hat noch keinen Charakter. Leg mit <b>+ Charakter</b> einen an, dann klick auf einen Slot und trag ein, was gebraucht wird.</div>`;
+    return h;
+  }
+  const p=progress(ch);const pct=p.tot?Math.round(p.have/p.tot*100):0;
+  h+=`<div class="sheethead"><input class="cname" aria-label="Charaktername" value="${esc(ch.name)}" ${ro?"readonly":""}><input class="cbuild sub" aria-label="Build" placeholder="Build, z. B. Guardian DomBlow" value="${esc(ch.build||"")}" ${ro?"readonly":""}>
+    <div class="progress">${p.have} von ${p.tot} Teilen gefunden<div class="bar"><span style="width:${pct}%"></span></div></div></div>`;
+  const sel=null;
+  h+=`<div class="dollwrap"><div class="doll">`;
+  SLOTS.filter(s=>s.a).forEach(s=>h+=slotHtml(ch,s.k,s.a==="a"?"Amu":s.n,s.a,sel));
+  h+=`</div><div class="flasks">`;
+  SLOTS.filter(s=>!s.a).forEach(s=>h+=slotHtml(ch,s.k,s.n,null,sel));
+  h+=`</div><div class="jlabel">Juwelen · Cluster · Abyss</div><div class="jewels">`;
+  (ch.jewels||[]).forEach((it,j)=>h+=slotHtml(ch,"jewel:"+j,jewelLabel(it),null,sel));
+  if(!ro) h+=`<button class="addj">+ Juwel / Cluster / Abyss</button>`;
+  h+=`</div></div>`;
+  /* checklist */
+  const its=itemsOf(ch);
+  const haveN=its.filter(x=>x.it.have).length;
+  h+=`<section><h2>Checkliste <small>${haveN} von ${its.length} Items</small></h2>`;
+  if(!its.length) h+=`<div class="empty-note">Noch nichts eingetragen. Klick oben auf einen Slot, um ein Unique, eine Replica oder ein Rare einzutragen.</div>`;
+  else{
+    h+=`<ul class="check">`;
+    its.forEach((x,ix)=>{const it=x.it;const u=it.kind==="unique";const src=u?srcText(it.name):null;const id=`ck-${pk}-${ix}`;
+      h+=`<li class="${it.have?"done":""} ${stat(it)}"><input type="checkbox" id="${id}" data-check="${x.key}" ${it.have?"checked":""} ${ro?"disabled":""}>
+        <label for="${id}" class="ckn ${u?"u":"rr"}">${esc(it.name||it.base||"Rare-Item")}</label>
+        <span class="cks">${esc(x.label)}</span>
+        <span class="ckq ${src&&src.legacy?"legacy":""}">${stat(it)==="offer"?`<span class="pill">${esc(otherName(pk))} hat's</span>`:""}${u?esc(src.t):"Rare"+(it.base?" · "+esc(it.base):"")}</span>
+        <button class="btn ghost ckb" data-pick="${x.key}" aria-label="${esc(it.name||x.label)} bearbeiten">Bearbeiten</button></li>`;});
+    h+=`</ul>`;
+  }
+  h+=`</section>`;
+  h+=`<section><h2>Gems <small>Links pro Item</small></h2><div class="groups">`;
+  const gg=ch.gemGroups||[];
+  if(!gg.length) h+=`<div class="empty-note">Leg eine Link-Gruppe an, z. B. „Hauptskill 6L“, und füg die Gems hinzu.</div>`;
+  gg.forEach((g,gi)=>{
+    h+=`<div class="group"><div class="ghead"><input aria-label="Gruppenname" data-gname="${gi}" value="${esc(g.name||"")}" placeholder="z. B. Hauptskill 6L" ${ro?"readonly":""}>
+      <select aria-label="Item" data-gloc="${gi}" ${ro?"disabled":""}>${GROUPLOC.map(([v,n])=>`<option value="${v}" ${g.loc===v?"selected":""}>${n}</option>`).join("")}</select>
+      ${ro?"":`<button class="btn ghost danger" data-gdel="${gi}" aria-label="Gruppe löschen">Entfernen</button>`}</div><div class="links">`;
+    (g.gems||[]).forEach((x,xi)=>{const gd=S.data.gemBy[x.n]||{c:"w",sup:false};
+      h+=`<span class="gem ${gd.sup?"sup":""}" title="${esc(gd.t||"")}"><span class="sock ${gd.c}"></span><span class="gn">${esc(x.n)}</span>
+      <button class="st ${x.have?"have":""}" data-gst="${gi}:${xi}" aria-label="${x.have?"Gefunden, als fehlend markieren":"Fehlt, als gefunden markieren"}" title="${x.have?"gefunden":"fehlt noch"}" ${ro?"disabled":""}></button>
+      ${ro?"":`<button data-grm="${gi}:${xi}" aria-label="Gem entfernen">×</button>`}</span>`;});
+    if(!ro) h+=`<button class="addgem" data-gadd="${gi}">+ Gem</button>`;
+    h+=`</div></div>`;
+  });
+  if(!ro) h+=`<div><button class="btn addgroup">+ Link-Gruppe</button></div>`;
+  h+=`</div></section>`;
+  if(!ro) h+=`<div class="row" style="margin-top:22px"><span class="confirm delwrap"><button class="btn ghost danger delchar">Charakter löschen</button></span></div>`;
+  return h;
+}
+function srcText(name){
+  const u=S.data.uniqueBy[name];
+  if(!u)return {t:"Unbekannt",legacy:false};
+  if(u.src)return {t:u.src,legacy:u.src==="Nicht mehr erhältlich"};
+  return {t:"Kein fester Drop-Ort, Weltdrop oder Div-Karte",legacy:false};
+}
+function stat(it){return it&&it.have?"have":it&&it.offer?"offer":"need";}
+function otherPk(pk){return pk==="p2"?"p1":"p2";}
+function otherName(pk){return S.players[otherPk(pk)]||"Kumpel";}
+function statSeg(attr,cur,pk){
+  const o=[["need","Fehlt noch"],["offer",esc(otherName(pk))+" hat's"],["have","Liegt bereit"]];
+  return `<div class="seg" role="group" aria-label="Status">${o.map(([v,n])=>`<button ${attr} data-st="${v}" aria-pressed="${cur===v}">${n}</button>`).join("")}</div>`;
+}
+function statLabel(st,pk){return st==="have"?"Liegt bereit":st==="offer"?otherName(pk)+" hat's":"Fehlt noch";}
+function jewelLabel(it){const k=jewelKind((it&&it.base)||"");return k==="cluster"?"Cluster":k==="abyss"?"Abyss":k==="timeless"?"Timeless":"Juwel";}
+function itemClass(it){return it.kind==="unique"?"u":"rr";}
+function slotHtml(ch,key,label,area,sel){
+  const it=getItem(ch,key);
+  const st=area?`style="grid-area:${area}"`:"";
+  const sm=area==="a"||area==="r1"||area==="r2"?" sm":"";
+  if(!it) return `<button class="slot empty${sm}" ${st} data-slot="${key}" aria-label="${esc(label)}: leer, Item eintragen"><span class="lab">${esc(label)}</span></button>`;
+  const tt=it.kind==="unique"?(it.name+" – Quelle: "+srcText(it.name).t):(it.name||it.base||"Rare");
+  return `<button class="slot ${itemClass(it)}${sm} ${sel===key?"selected":""}" ${st} data-slot="${key}" title="${esc(tt)}" aria-label="${esc(label)}: ${esc(tt)}"><span class="dot ${stat(it)}"></span><span class="lab">${esc(label)}</span><span class="nm">${esc(it.name||it.base||"Rare")}</span></button>`;
+}
+function tipHtml(x,detail){
+  const it=x.it;const c=itemClass(it);
+  const infs=(it.inf||[]).map(i=>INFNAME[i]).filter(Boolean);
+  let h=`<article class="tip ${c}"><header><div class="slotname">${esc(x.label)}</div>`;
+  if(it.kind==="unique") h+=`<div class="iname">${esc(it.name)}</div><div class="ibase">${esc(it.base)}</div>`;
+  else h+=`<div class="iname">${esc(it.name||"Rare-Item")}</div><div class="ibase">${esc(it.base||"Beliebige Basis")}</div>`;
+  if(infs.length) h+=`<div class="inf">${infs.join(" · ")}</div>`;
+  h+=`</header><ul>`;
+  (it.mods||[]).forEach(m=>{const cls=m.p==="C"||m.p==="E"?"c":m.p==="X"?"x":"";const tag=it.kind==="unique"?"":`<span class="tag">${m.p==="P"?"P":m.p==="S"?"S":m.p==="C"?"Craft":m.p==="E"?"Enchant":"Frei"}</span>`;h+=`<li class="${cls}">${tag}${esc(m.t)}</li>`;});
+  if(!(it.mods||[]).length) h+=`<li class="x">Keine Mods festgelegt</li>`;
+  h+=`</ul>`;
+  if(it.kind==="unique"){const src=srcText(it.name);h+=`<div class="src ${src.legacy?"legacy":""}"><span>Quelle</span>${esc(src.t)}</div>`;}
+  if(it.note) h+=`<div class="note">${esc(it.note)}</div>`;
+  h+=`<footer>`;
+  if(S.readonly||!x.key) h+=`<span class="status ${stat(it)}"><i></i>${esc(statLabel(stat(it),x.pk||"p1"))}</span>`;
+  else h+=statSeg(`data-stk="${x.key}"`,stat(it),x.pk);
+  h+=`<span style="flex:1"></span>`;
+  if(!S.readonly&&x.key) h+=`<button class="btn ghost" data-edit="${x.key}">Bearbeiten</button>`;
+  if(detail) h+=`<button class="btn ghost" data-close="1" aria-label="Detail schließen">×</button>`;
+  h+=`</footer></article>`;
+  return h;
+}
+function getItem(ch,key){
+  if(key.startsWith("jewel:")) return (ch.jewels||[])[+key.slice(6)]||null;
+  return (ch.slots||{})[key]||null;
+}
+function setItem(ch,key,it){
+  if(key.startsWith("jewel:")){
+    const arr=(ch.jewels||[]).slice();const i=+key.slice(6);
+    if(it) arr[i]=it; else arr.splice(i,1);
+    writeChar(ch,{jewels:arr});
+  }else{
+    const slots=Object.assign({},ch.slots||{});
+    if(it) slots[key]=it; else delete slots[key];
+    ch.slots=slots;
+    writeChar(ch,{slots:{[key]:it||null}});
+  }
+  render();
+}
+
+/* ---------- bindings (scoped to one player column) ---------- */
+const timers={};
+function debounce(id,fn,ms){clearTimeout(timers[id]);timers[id]=setTimeout(fn,ms);}
+function bindCol(col,pk){
+  const ro=S.readonly;const q=s=>col.querySelector(s);const qa=s=>col.querySelectorAll(s);
+  const pn=q(".pname");
+  if(!ro) pn.oninput=()=>{S.players[pk]=pn.value;debounce("pl",writePlayers,600);};
+  qa("[data-char]").forEach(b=>b.onclick=()=>{S.view[pk]=b.dataset.char;saveView();render();});
+  const ac=q(".addchar");if(ac)ac.onclick=()=>newChar(pk);
+  const ch=viewChar(pk);if(!ch)return;
+  const cn=q(".cname"),cb=q(".cbuild");
+  if(!ro){
+    cn.oninput=()=>{ch.name=cn.value;debounce("n"+ch.id,()=>{writeChar(ch,{name:ch.name});refreshTabs();},600);};
+    cb.oninput=()=>{ch.build=cb.value;debounce("b"+ch.id,()=>{writeChar(ch,{build:ch.build});refreshTabs();},600);};
+  }
+  qa("[data-slot]").forEach(b=>b.onclick=()=>{if(!ro)openEditor(ch,b.dataset.slot);});
+  qa("[data-edit]").forEach(b=>b.onclick=()=>openEditor(ch,b.dataset.edit));
+  qa("[data-close]").forEach(b=>b.onclick=()=>{S.sel[pk]=null;render();});
+  const setStat=(k,st)=>{const it=Object.assign({},getItem(ch,k));if(stat(it)===st)return;it.have=st==="have";it.offer=st==="offer"?otherPk(pk):"";setItem(ch,k,it);};
+  qa("[data-stk]").forEach(b=>b.onclick=()=>setStat(b.dataset.stk,b.dataset.st));
+  qa("[data-check]").forEach(c=>c.onchange=()=>{const it=getItem(ch,c.dataset.check);setStat(c.dataset.check,c.checked?"have":(it&&it.offer?"offer":"need"));});
+  qa("[data-pick]").forEach(b=>b.onclick=()=>{if(!ro)openEditor(ch,b.dataset.pick);});
+  const aj=q(".addj");if(aj)aj.onclick=()=>openEditor(ch,"jewel:"+(ch.jewels||[]).length);
+  const del=q(".delchar");if(del)del.onclick=()=>{
+    const w=q(".delwrap");
+    w.innerHTML=`„${esc(ch.name)}“ wirklich löschen? <button class="btn danger dy">Löschen</button><button class="btn ghost dn">Abbrechen</button>`;
+    w.querySelector(".dy").onclick=()=>deleteChar(ch);w.querySelector(".dn").onclick=render;
+  };
+  const ag=q(".addgroup");if(ag)ag.onclick=()=>{const gg=(ch.gemGroups||[]).concat([{id:uid(),name:"",loc:"",gems:[]}]);writeChar(ch,{gemGroups:gg});render();const i=document.querySelector(`[data-col="${pk}"] [data-gname="${gg.length-1}"]`);if(i)i.focus();};
+  qa("[data-gname]").forEach(i=>i.oninput=()=>{const gg=clone(ch.gemGroups);gg[+i.dataset.gname].name=i.value;ch.gemGroups=gg;debounce("g"+ch.id,()=>writeChar(ch,{gemGroups:ch.gemGroups}),600);});
+  qa("[data-gloc]").forEach(s=>s.onchange=()=>{const gg=clone(ch.gemGroups);gg[+s.dataset.gloc].loc=s.value;writeChar(ch,{gemGroups:gg});});
+  qa("[data-gdel]").forEach(b=>b.onclick=()=>{const gg=clone(ch.gemGroups);gg.splice(+b.dataset.gdel,1);writeChar(ch,{gemGroups:gg});render();});
+  qa("[data-gst]").forEach(b=>b.onclick=()=>{const [gi,xi]=b.dataset.gst.split(":").map(Number);const gg=clone(ch.gemGroups);gg[gi].gems[xi].have=!gg[gi].gems[xi].have;writeChar(ch,{gemGroups:gg});render();});
+  qa("[data-grm]").forEach(b=>b.onclick=()=>{const [gi,xi]=b.dataset.grm.split(":").map(Number);const gg=clone(ch.gemGroups);gg[gi].gems.splice(xi,1);writeChar(ch,{gemGroups:gg});render();});
+  qa("[data-gadd]").forEach(b=>b.onclick=()=>openGemPicker(ch,+b.dataset.gadd));
+}
+function refreshTabs(){
+  document.querySelectorAll("[data-char]").forEach(b=>{const c=S.chars.find(x=>x.id===b.dataset.char);if(c)b.innerHTML=tabLabel(c);});
+  PK.forEach(pk=>{const i=document.querySelector(`[data-col="${pk}"] .pname`);if(i&&document.activeElement!==i)i.value=S.players[pk]||"";});
+}
+const clone=o=>JSON.parse(JSON.stringify(o||[]));
+
+/* ---------- modal helpers ---------- */
+let lastFocus=null;
+function openModal(html,onBind){
+  lastFocus=document.activeElement;
+  $("#modal").innerHTML=`<div class="scrim" id="scrim">${html}</div>`;
+  const sc=$("#scrim");
+  sc.addEventListener("mousedown",e=>{if(e.target===sc)closeModal();});
+  document.addEventListener("keydown",escClose);
+  onBind();
+}
+function escClose(e){if(e.key==="Escape")closeModal();}
+function closeModal(){$("#modal").innerHTML="";document.removeEventListener("keydown",escClose);if(lastFocus&&lastFocus.focus)try{lastFocus.focus();}catch(e){}}
+
+/* ---------- mod availability ---------- */
+function weightFor(widx,tags){
+  const W=S.data.W[widx];
+  for(let i=0;i<W.length;i++){if(tags.has(W[i][0]))return W[i][1];}
+  return 0;
+}
+function modKind(base){
+  if(base.t==="Flask")return "f";
+  if(base.t!=="Jewel")return "";
+  if(base.st==="Abyss")return "a";
+  if(base.st==="Cluster")return "c";
+  if(!base.st)return "j";
+  return "none";
+}
+function jewelKind(text){const t=norm(text);return t.includes("cluster")?"cluster":t.includes("eye jewel")?"abyss":t.includes("timeless")?"timeless":"normal";}
+function availableGroups(base,infs,extra){
+  if(!base)return [];
+  const tags=new Set(base.tags);
+  (infs||[]).forEach(i=>{if(base.inf&&base.inf[i])tags.add(base.inf[i]);});
+  (extra||[]).forEach(t=>t&&tags.add(t));
+  const kind=modKind(base);
+  const out=[];
+  S.data.groups.forEach((g,gi)=>{
+    if((g.k||"")!==kind)return;
+    const tiers=g.T.filter(t=>weightFor(t[2],tags)>0);
+    if(tiers.length) out.push({gi,p:g.p,x:g.x,tiers,inf:tiers.some(t=>S.data.W[t[2]].some(w=>/_(shaper|elder|crusader|eyrie|basilisk|adjudicator)$/.test(w[0])&&tags.has(w[0])&&w[1]>0))});
+  });
+  return out;
+}
+function craftedFor(base){
+  if(!base)return [];
+  let t=base.t;
+  if(t==="One Handed Sword"&&base.tags.includes("rapier"))t="Thrusting One Handed Sword";
+  return S.data.crafted.filter(c=>c.ty.includes(t));
+}
+
+/* ---------- item editor ---------- */
+function slotTypeOf(key){return key.startsWith("jewel:")?"jewel":SLOTMAP[key].type;}
+function slotLabel(key){return key.startsWith("jewel:")?"Juwel "+(+key.slice(6)+1):SLOTMAP[key].n;}
+function openEditor(ch,key){
+  const type=slotTypeOf(key);
+  const chId=ch.id;const fresh=()=>S.chars.find(c=>c.id===chId)||ch;
+  const existing=getItem(ch,key);
+  const E={
+    tab: existing&&existing.kind==="rare"?"rare":"unique",
+    uq:"", onlyRep:false, uSel: existing&&existing.kind==="unique"?existing.name:null,
+    base: existing&&existing.kind==="rare"?existing.base:"", bq:"",
+    inf: existing&&existing.inf?existing.inf.slice():[],
+    mods: existing&&existing.kind==="rare"?clone(existing.mods).filter(m=>m.p!=="E"):[],
+    ctag: existing&&existing.ctag||"", cpass: existing&&existing.cpass||0, jf:"all",
+    mq:"", cq:"", rname: existing&&existing.kind==="rare"?existing.name||"":"",
+    note: existing?existing.note||"":"", st: stat(existing), free:""
+  };
+  const html=`<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="edt"><header><h3 id="edt">${esc(slotLabel(key))} planen</h3>${statSeg('data-est="1"',E.st,playerOf(ch))}<button class="btn ghost" id="mclose" aria-label="Schließen">Schließen</button></header>
+    <div class="tabs" role="tablist"><button role="tab" data-tab="unique">Unique / Replica</button><button role="tab" data-tab="rare">Rare bauen</button></div>
+    <div class="body" id="ebody"></div>
+    <footer>${existing?`<button class="btn ghost danger" id="eremove">Slot leeren</button><span style="flex:1"></span>`:""}<button class="btn ghost" id="ecancel">Abbrechen</button><button class="btn pri" id="esave">Übernehmen</button></footer></div>`;
+  openModal(html,()=>{
+    $("#mclose").onclick=closeModal;$("#ecancel").onclick=closeModal;
+    document.querySelectorAll("[data-est]").forEach(b=>b.onclick=()=>{E.st=b.dataset.st;document.querySelectorAll("[data-est]").forEach(x=>x.setAttribute("aria-pressed",x===b));});
+    if(existing)$("#eremove").onclick=()=>{closeModal();setItem(fresh(),key,null);};
+    document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{E.tab=b.dataset.tab;draw();});
+    $("#esave").onclick=save;
+    draw();
+  });
+  function save(){
+    let it=null;
+    if(E.tab==="unique"){
+      const u=S.data.uniques.find(x=>x.n===E.uSel);
+      if(!u){flash("Wähl zuerst ein Unique aus der Liste.");return;}
+      it={kind:"unique",name:u.n,base:u.b,replica:!!u.r,inf:[],mods:u.m.map(t=>({p:"U",t})),note:E.note,have:E.st==="have",offer:E.st==="offer"?otherPk(playerOf(fresh())):""};
+    }else{
+      if(!E.base&&!E.mods.length){flash("Wähl eine Basis oder füg mindestens einen Mod hinzu.");return;}
+      const b=S.data.baseBy[E.base];let mods=E.mods;let ctag="",cpass=0;
+      if(b&&b.st==="Cluster"){
+        const cj=S.data.clusters[b.n];const sk=cj&&cj.skills.find(x=>x[1]===E.ctag);
+        ctag=sk?sk[1]:"";cpass=E.cpass||0;
+        const head=[];if(cpass)head.push({p:"E",t:"Adds "+cpass+" Passive Skills"});if(sk)head.push({p:"E",t:sk[2]});
+        mods=head.concat(mods);
+      }
+      it={kind:"rare",name:E.rname.trim(),base:E.base,replica:false,inf:E.inf,ctag,cpass,mods,note:E.note,have:E.st==="have",offer:E.st==="offer"?otherPk(playerOf(fresh())):""};
+    }
+    closeModal();setItem(fresh(),key,it);
+  }
+  function flash(t){const f=$("#eflash");if(f){f.textContent=t;}}
+  function draw(){
+    document.querySelectorAll("[data-tab]").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===E.tab));
+    const body=$("#ebody");
+    body.innerHTML=E.tab==="unique"?uniqueHtml():rareHtml();
+    E.tab==="unique"?bindUnique():bindRare();
+  }
+  /* unique tab */
+  function uniqueList(){
+    const q=E.uq.trim();const nq=norm(q);
+    const out=[];
+    S.data.uniques.forEach(u=>{
+      const ok=type==="offhand"?(u.s==="offhand"||u.s==="weapon"):u.s===type;
+      if(!ok)return;if(E.onlyRep&&!u.r)return;
+      if(type==="jewel"&&E.jf!=="all"&&jewelKind(u.b)!==E.jf)return;
+      if(!q){out.push([0,u]);return;}
+      const f=fuzzy(q,u.n+" "+u.b);
+      if(f){out.push([f===2?(norm(u.n).startsWith(nq)?4:3):2,u]);return;}
+      if(nq.length>=3&&u.m.some(m=>norm(m).includes(nq)))out.push([1,u]);
+    });
+    const lg=u=>u.src==="Nicht mehr erhältlich"?1:0;
+    return out.sort((a,b)=>b[0]-a[0]||lg(a[1])-lg(b[1])).map(x=>x[1]);
+  }
+  function uniqueHtml(){
+    return `<div class="field" style="gap:8px"><div class="row"><input class="inp" id="uq" placeholder="Unique suchen, Name, Basis oder Mod (Tippfehler okay)" value="${esc(E.uq)}" style="flex:1 1 220px"><button class="chip" id="onlyrep" aria-pressed="${E.onlyRep}">Nur Replicas</button></div>${jfChips()}
+      <div class="list" id="ulist"></div><div class="hint" id="eflash"></div></div>
+      <div class="preview" id="uprev"></div>`;
+  }
+  function bindUnique(){
+    const uq=$("#uq");uq.oninput=()=>{E.uq=uq.value;drawUList();};
+    $("#onlyrep").onclick=()=>{E.onlyRep=!E.onlyRep;$("#onlyrep").setAttribute("aria-pressed",E.onlyRep);drawUList();};
+    bindJf(drawUList);
+    drawUList();drawUPrev();setTimeout(()=>uq.focus(),20);
+  }
+  function drawUList(){
+    const L=uniqueList();const shown=L.slice(0,200);
+    $("#ulist").innerHTML=shown.length?shown.map(u=>`<button class="it ${u.n===E.uSel?"sel":""}" data-u="${esc(u.n)}"><span class="u">${esc(u.n)}</span>${u.r?`<span class="rp">Replica</span>`:""}<br><small>${esc(u.b)}</small><span class="lsrc ${u.src==="Nicht mehr erhältlich"?"legacy":""}">${esc(u.src||"Weltdrop")}</span></button>`).join("")+(L.length>200?`<div class="none">${L.length-200} weitere, Suche eingrenzen</div>`:""):`<div class="none">Nichts gefunden.</div>`;
+    document.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>{E.uSel=b.dataset.u;document.querySelectorAll("[data-u]").forEach(x=>x.classList.toggle("sel",x===b));drawUPrev();});
+  }
+  function drawUPrev(){
+    const u=S.data.uniques.find(x=>x.n===E.uSel);
+    let h=`<div class="lbl" style="margin-bottom:6px">Vorschau</div>`;
+    if(!u) h+=`<div class="empty-note">Wähl links ein Unique aus.</div>`;
+    else h+=tipHtmlRaw({kind:"unique",name:u.n,base:u.b,mods:u.m.map(t=>({p:"U",t}))},slotLabel(key));
+    h+=noteFields();
+    $("#uprev").innerHTML=h;bindNote();
+  }
+  function noteFields(){
+    return `<div class="field" style="margin-top:12px"><label for="enote">Notiz</label><textarea class="inp" id="enote" placeholder="z. B. braucht Corruption, 6L, mit Kumpel tauschen">${esc(E.note)}</textarea></div>`;
+  }
+  function bindNote(){const n=$("#enote");n.oninput=()=>E.note=n.value;}
+  function jfChips(){
+    if(type!=="jewel")return "";
+    return `<div class="row" style="gap:4px">${[["all","Alle"],["normal","Normale Juwelen"],["cluster","Cluster"],["abyss","Abyss"],["timeless","Timeless"]].map(([k,n])=>`<button class="chip" data-jf="${k}" aria-pressed="${E.jf===k}">${n}</button>`).join("")}</div>`;
+  }
+  function bindJf(redraw){document.querySelectorAll("[data-jf]").forEach(b=>b.onclick=()=>{E.jf=b.dataset.jf;document.querySelectorAll("[data-jf]").forEach(x=>x.setAttribute("aria-pressed",x===b));redraw();});}
+  /* rare tab */
+  function baseList(){
+    const q=norm(E.bq);
+    return S.data.bases.filter(b=>{
+      const ok=type==="offhand"?(b.s==="offhand"||(b.s==="weapon"&&!/^Two Handed|^Bow$|^Staff$/.test(b.t))):b.s===type;
+      if(!ok)return false;
+      if(type==="jewel"&&E.jf!=="all"&&jewelKind(b.n)!==E.jf)return false;
+      return !q||fuzzy(q,b.n+" "+b.t+" "+(b.st||""));
+    }).sort((a,b)=>b.lvl-a.lvl);
+  }
+  function rareHtml(){
+    const base=S.data.baseBy[E.base];
+    return `<div class="field" style="gap:10px">
+      <div class="row"><div class="field" style="flex:1 1 200px"><label for="bq">Basis</label><input class="inp" id="bq" placeholder="${esc(E.base||"Basis suchen, z. B. Hubris Circlet")}" value="${esc(E.bq)}"></div>
+        <div class="field" style="flex:1 1 160px"><label for="rname">Name (optional)</label><input class="inp" id="rname" placeholder="z. B. Res-Ring mit Life" value="${esc(E.rname)}"></div></div>
+      ${type==="jewel"&&!E.base?jfChips():""}
+      <div class="list" id="blist" style="max-height:150px" ${E.base&&!E.bq?"hidden":""}></div>
+      ${base&&base.st==="Cluster"?clusterHtml(base):""}
+      ${base&&modKind(base)==="none"?`<div class="hint">Für diese Basis gibt es keine normalen Mods. Trag Wünsche unten als eigenen Mod oder in der Notiz ein.</div>`:""}
+      ${base?`<div class="hint">Gewählt: <b style="color:var(--rare)">${esc(base.n)}</b> · ${esc(base.t)}${base.st?" · "+esc(base.st):""} · ab Level ${base.lvl} <button class="btn ghost" id="bchange" style="padding:1px 8px;margin-left:6px">Ändern</button></div>`:""}
+      ${base&&base.inf&&Object.keys(base.inf).length?`<div class="field"><span class="lbl">Einfluss (max. 2)</span><div class="row">${INF.filter(([k])=>base.inf[k]).map(([k,n])=>`<button class="chip" data-inf="${k}" aria-pressed="${E.inf.includes(k)}">${n}</button>`).join("")}</div></div>`:""}
+      ${base?`<div class="field"><label for="mq">Mods filtern</label><input class="inp" id="mq" placeholder="z. B. Life, Resistance, Minion" value="${esc(E.mq)}"></div><div class="affix" id="affix"></div>
+        <details class="crafted"><summary>Crafting-Bench-Mods</summary><input class="inp" id="cq" placeholder="Bench-Mod suchen" value="${esc(E.cq)}" style="margin:6px 0"><div class="list" id="clist" style="max-height:200px"></div></details>`:`<div class="empty-note">Wähl eine Basis, dann siehst du alle Prefixe und Suffixe, die darauf rollen können.</div>`}
+      <div class="field"><label for="free">Eigener Mod (Enchant, Eldritch-Implicit, Fractured …)</label><div class="row"><input class="inp" id="free" placeholder="z. B. Fractured +# to maximum Life" value="${esc(E.free)}" style="flex:1 1 200px"><button class="btn" id="addfree">Hinzufügen</button></div></div>
+      <div class="hint" id="eflash"></div>
+    </div>
+    <div class="preview"><div class="row" style="justify-content:space-between;margin-bottom:6px"><span class="lbl">Wunsch-Mods</span><span class="counts" id="counts"></span></div><div class="picked" id="picked"></div>${noteFields()}</div>`;
+  }
+  function bindRare(){
+    const bq=$("#bq");
+    bq.oninput=()=>{E.bq=bq.value;$("#blist").hidden=false;drawBList();};
+    bq.onfocus=()=>{$("#blist").hidden=false;drawBList();};
+    drawBList();
+    const bc=$("#bchange");if(bc)bc.onclick=()=>{$("#blist").hidden=false;bq.focus();};
+    const rn=$("#rname");rn.oninput=()=>E.rname=rn.value;
+    bindJf(drawBList);
+    const ce=$("#cench");if(ce)ce.onchange=()=>{E.ctag=ce.value;E.mods=E.mods.filter(m=>!(m.p==="P"||m.p==="S")||availableGroups(S.data.baseBy[E.base],E.inf,[E.ctag]).some(g=>g.gi===m.g));drawAffix();drawPicked();};
+    const cp=$("#cpass");if(cp)cp.onchange=()=>{E.cpass=+cp.value;};
+    document.querySelectorAll("[data-inf]").forEach(b=>b.onclick=()=>{const k=b.dataset.inf;if(E.inf.includes(k))E.inf=E.inf.filter(x=>x!==k);else{if(E.inf.length>=2)E.inf.shift();E.inf.push(k);}draw();});
+    const mq=$("#mq");if(mq){mq.oninput=()=>{E.mq=mq.value;drawAffix();};drawAffix();}
+    const cq=$("#cq");if(cq){cq.oninput=()=>{E.cq=cq.value;drawCrafted();};drawCrafted();}
+    const fr=$("#free");fr.oninput=()=>E.free=fr.value;
+    const addFree=()=>{const v=E.free.trim();if(!v)return;E.mods.push({p:"X",t:v});E.free="";fr.value="";drawPicked();};
+    $("#addfree").onclick=addFree;fr.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();addFree();}};
+    drawPicked();bindNote();
+  }
+  function clusterHtml(base){
+    const cj=S.data.clusters[base.n];if(!cj)return "";
+    const opts=[];for(let n=cj.min;n<=cj.max;n++)opts.push(n);
+    return `<div class="row" style="align-items:flex-end">
+      <div class="field" style="flex:2 1 220px"><label for="cench">Enchant (Small Passives)</label><select class="inp" id="cench"><option value="">– Enchant wählen –</option>${cj.skills.map(s=>`<option value="${esc(s[1])}" ${s[1]===E.ctag?"selected":""}>${esc(s[0])}</option>`).join("")}</select></div>
+      <div class="field" style="flex:1 1 120px"><label for="cpass">Passives</label><select class="inp" id="cpass"><option value="0">egal</option>${opts.map(n=>`<option value="${n}" ${n===E.cpass?"selected":""}>${n} Passives</option>`).join("")}</select></div></div>
+      ${E.ctag?"":`<div class="hint">Wähl den Enchant, dann erscheinen die passenden Notables bei den Prefixen und Suffixen.</div>`}`;
+  }
+  function drawBList(){
+    const el=$("#blist");if(!el||el.hidden)return;
+    const L=baseList().slice(0,120);
+    el.innerHTML=L.length?L.map(b=>`<button class="it ${b.n===E.base?"sel":""}" data-b="${esc(b.n)}">${esc(b.n)} <small>${esc(b.t)}${b.st?" · "+esc(b.st):""} · Lvl ${b.lvl}</small></button>`).join(""):`<div class="none">Keine passende Basis.</div>`;
+    el.querySelectorAll("[data-b]").forEach(b=>b.onclick=()=>{
+      const nb=b.dataset.b;
+      if(nb!==E.base){E.base=nb;E.inf=[];E.ctag="";E.cpass=0;E.mods=E.mods.filter(m=>m.p==="X");}
+      E.bq="";draw();
+    });
+  }
+  function drawAffix(){
+    const base=S.data.baseBy[E.base];const el=$("#affix");if(!el)return;
+    const q=norm(E.mq);
+    const groups=availableGroups(base,E.inf,[E.ctag]).filter(g=>!q||norm(g.x).includes(q)||g.tiers.some(t=>norm(t[3]).includes(q)));
+    const col=(p,title)=>{
+      const gs=groups.filter(g=>g.p===p);
+      return `<div><h4>${title}<small>${gs.length}</small></h4><div class="list">${gs.length?gs.map(g=>{
+        const on=E.mods.some(m=>m.g===g.gi);
+        return `<button class="mod ${on?"on":""}" data-g="${g.gi}">${esc(g.tiers[0][1])}<small>${g.tiers.length} Tiers · T1 ab ilvl ${g.tiers[0][0]}${g.inf?" · Einfluss":""}</small></button>`;}).join(""):`<div class="none">Keine Treffer.</div>`}</div></div>`;
+    };
+    el.innerHTML=col("P","Prefixe")+col("S","Suffixe");
+    el.querySelectorAll("[data-g]").forEach(b=>b.onclick=()=>{
+      const gi=+b.dataset.g;const ex=E.mods.findIndex(m=>m.g===gi);
+      if(ex>=0)E.mods.splice(ex,1);
+      else{const g=groups.find(x=>x.gi===gi);E.mods.push({p:g.p,g:gi,t:g.tiers[0][1],tier:0});}
+      drawAffix();drawPicked();
+    });
+  }
+  function drawCrafted(){
+    const base=S.data.baseBy[E.base];const el=$("#clist");if(!el)return;
+    const q=norm(E.cq);
+    const seen=new Set();
+    const L=craftedFor(base).filter(c=>{if(seen.has(c.t))return false;seen.add(c.t);return !q||norm(c.t).includes(q);}).slice(0,150);
+    el.innerHTML=L.length?L.map((c,i)=>`<button class="mod" style="color:var(--craft)" data-c="${esc(c.t)}" data-cp="${c.p}">${esc(c.t)}<small>${c.p==="P"?"Prefix":"Suffix"} · Bench</small></button>`).join(""):`<div class="none">Keine Bench-Mods für diese Basis.</div>`;
+    el.querySelectorAll("[data-c]").forEach(b=>b.onclick=()=>{E.mods.push({p:"C",cp:b.dataset.cp,t:b.dataset.c});drawPicked();});
+  }
+  function drawPicked(){
+    const el=$("#picked");if(!el)return;
+    const base=S.data.baseBy[E.base];
+    const avail=base?Object.fromEntries(availableGroups(base,E.inf,[E.ctag]).map(g=>[g.gi,g])):{};
+    if(!E.mods.length) el.innerHTML=`<div class="empty-note" style="padding:10px;font-size:13px">Noch keine Mods. Klick links Prefixe und Suffixe an.</div>`;
+    else el.innerHTML=E.mods.map((m,i)=>{
+      const cls=m.p==="C"?"c":m.p==="X"?"x":"";
+      let sel="";
+      if((m.p==="P"||m.p==="S")&&avail[m.g]){
+        const g=avail[m.g];
+        sel=`<select data-tier="${i}" aria-label="Mindest-Tier">${g.tiers.map((t,ti)=>`<option value="${ti}" ${t[1]===m.t?"selected":""}>T${ti+1} · ilvl ${t[0]} · ${esc(t[1])}</option>`).join("")}</select>`;
+      }
+      const lab=m.p==="P"?"Prefix":m.p==="S"?"Suffix":m.p==="C"?"Bench "+(m.cp==="P"?"Prefix":"Suffix"):"Eigener Mod";
+      return `<div class="pk ${cls}"><div class="row" style="justify-content:space-between;gap:6px"><span class="lbl">${lab}</span><button class="btn ghost" data-rm="${i}" style="padding:0 7px" aria-label="Mod entfernen">×</button></div><span class="t">${esc(m.t)}</span>${sel}</div>`;
+    }).join("");
+    el.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{E.mods.splice(+b.dataset.rm,1);drawPicked();drawAffix();});
+    el.querySelectorAll("[data-tier]").forEach(s=>s.onchange=()=>{const m=E.mods[+s.dataset.tier];const g=avail[m.g];m.t=g.tiers[+s.value][1];m.tier=+s.value;drawPicked();});
+    const np=E.mods.filter(m=>m.p==="P"||(m.p==="C"&&m.cp==="P")).length,ns=E.mods.filter(m=>m.p==="S"||(m.p==="C"&&m.cp==="S")).length;
+    const c=$("#counts");if(c)c.innerHTML=`<span class="${np>3?"over":""}">P ${np}/3</span> · <span class="${ns>3?"over":""}">S ${ns}/3</span>`;
+  }
+}
+function tipHtmlRaw(it,label){return tipHtml({key:"",label,it}).replace(/<footer>[\s\S]*<\/footer>/,"");}
+
+/* ---------- gem picker ---------- */
+function openGemPicker(ch0,gi){
+  const P={q:"",f:"all"};const chId=ch0.id;let ch=ch0;const fresh=()=>(ch=S.chars.find(c=>c.id===chId)||ch);
+  const html=`<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="gpt" style="width:min(620px,100%)"><header><h3 id="gpt">Gem hinzufügen</h3><button class="btn ghost" id="mclose">Schließen</button></header>
+    <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+      <div class="row"><input class="inp" id="gq" placeholder="Gem suchen, z. B. Dominating Blow" style="flex:1 1 220px">
+      <span class="row" style="gap:4px"><button class="chip" data-gf="all" aria-pressed="true">Alle</button><button class="chip" data-gf="act" aria-pressed="false">Skills</button><button class="chip" data-gf="sup" aria-pressed="false">Supports</button><button class="chip" data-gf="alt" aria-pressed="false">Transfiguriert</button></span></div>
+      <div class="list" id="glist" style="max-height:420px"></div>
+      <div class="hint">Klick auf einen Gem fügt ihn der Gruppe hinzu. Du kannst mehrere nacheinander anklicken.</div>
+    </div></div>`;
+  openModal(html,()=>{
+    $("#mclose").onclick=()=>{closeModal();render();};
+    const q=$("#gq");q.oninput=()=>{P.q=q.value;draw();};setTimeout(()=>q.focus(),20);
+    document.querySelectorAll("[data-gf]").forEach(b=>b.onclick=()=>{P.f=b.dataset.gf;document.querySelectorAll("[data-gf]").forEach(x=>x.setAttribute("aria-pressed",x===b));draw();});
+    draw();
+  });
+  function draw(){
+    fresh();const qq=norm(P.q);
+    const L=S.data.gems.filter(g=>{
+      if(P.f==="act"&&g.sup)return false;if(P.f==="sup"&&!g.sup)return false;if(P.f==="alt"&&!g.alt)return false;
+      return !qq||fuzzy(P.q,g.n+" "+g.t);
+    }).sort((a,b)=>qq?(fuzzy(P.q,b.n)-fuzzy(P.q,a.n)):0).slice(0,200);
+    const inGroup=new Set(((ch.gemGroups||[])[gi]||{gems:[]}).gems.map(x=>x.n));
+    $("#glist").innerHTML=L.length?L.map(g=>`<button class="it" data-pick="${esc(g.n)}"><span class="sock ${g.c}" style="display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px"></span><span style="color:${g.sup?"#9fc8c4":"var(--gem)"}">${esc(g.n)}</span>${inGroup.has(g.n)?` <small>✓ in Gruppe</small>`:""}<br><small>${esc(g.t)}</small></button>`).join(""):`<div class="none">Kein Gem gefunden.</div>`;
+    document.querySelectorAll("[data-pick]").forEach(b=>b.onclick=()=>{
+      fresh();const gg=clone(ch.gemGroups);if(!gg[gi])return;
+      gg[gi].gems.push({n:b.dataset.pick,have:false});writeChar(ch,{gemGroups:gg});draw();
+    });
+  }
+}
+
+/* ---------- boot ---------- */
+loadData().then(initStore).catch(e=>{$("#root").innerHTML=`<div class="banner">Die Item-Daten konnten nicht geladen werden. Lad die Seite neu.</div>`;setSync("warn","Fehler");});
+})();
+</script>
+
+</body>
+</html>
