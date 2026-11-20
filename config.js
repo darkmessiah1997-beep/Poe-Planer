@@ -3,10 +3,10 @@
 // (Projekteinstellungen > Allgemein > Meine Apps > Web-App > SDK-Einrichtung und -Konfiguration > "Konfiguration").
 // Solange hier "DEIN-PROJEKT" steht, speichert die Seite nur lokal im Browser.
 window.FIREBASE_CONFIG = {
-  apiKey: "AIzaSyDPZlcp7T1w859DprIo460h3ZUbdprbWI4",
-  authDomain: "ssf-ratto.firebaseapp.com",
-  projectId: "ssf-ratto",
-  storageBucket: "ssf-ratto.firebasestorage.app",
-  messagingSenderId: "801378675315",
-  appId: "1:801378675315:web:eb32cd9fc2dcff2738d806",
+  apiKey: "DEIN_API_KEY",
+  authDomain: "DEIN-PROJEKT.firebaseapp.com",
+  projectId: "DEIN-PROJEKT",
+  storageBucket: "DEIN-PROJEKT.firebasestorage.app",
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:0000000000000000"
 };

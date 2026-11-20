@@ -72,6 +72,7 @@ function showShare(){
   --gem-b:#5f8fe0;
   --ok:#78b46a;
   --offer:#5fb8d8;
+  --foul:#e07ad0;
   --miss:#c9643c;
   --focus:#e9d670;
   --f-display:"Alegreya SC",Georgia,"Times New Roman",serif;
@@ -176,6 +177,10 @@ section+section{margin-top:28px}
 .tip ul{list-style:none;margin:0;padding:8px 10px;display:flex;flex-direction:column;gap:2px;text-align:center}
 .tip li{color:var(--magic);font-size:13.5px;line-height:1.3}
 .tip li.c{color:var(--craft)}
+.tip li.f{color:var(--foul)}
+.tip li .tag.ftag{color:var(--foul)}
+.tip .fbnote{padding:0 10px 8px;font-size:12px;color:var(--muted);text-align:center}
+.list .it .rp.fbp{color:var(--foul);border-color:color-mix(in srgb,var(--foul) 45%,transparent)}
 .tip li.x{color:var(--fg);font-style:italic}
 .tip li .tag{font-family:var(--f-mono);font-size:10px;color:var(--muted);margin-right:5px;vertical-align:1px}
 .slot.selected{outline:2px solid var(--rare);outline-offset:1px}
@@ -562,6 +567,7 @@ function srcText(name){
   if(u.src)return {t:u.src,legacy:u.src==="Nicht mehr erhältlich"};
   return {t:"Kein fester Drop-Ort, Weltdrop oder Div-Karte",legacy:false};
 }
+function uMods(u){return u.m.map((t,i)=>({p:u.fb&&i===u.fi?"F":"U",t}));}
 function stat(it){return it&&it.have?"have":it&&it.offer?"offer":"need";}
 function otherPk(pk){return pk==="p2"?"p1":"p2";}
 function otherName(pk){return S.players[otherPk(pk)]||"Kumpel";}
@@ -588,9 +594,10 @@ function tipHtml(x,detail){
   else h+=`<div class="iname">${esc(it.name||"Rare-Item")}</div><div class="ibase">${esc(it.base||"Beliebige Basis")}</div>`;
   if(infs.length) h+=`<div class="inf">${infs.join(" · ")}</div>`;
   h+=`</header><ul>`;
-  (it.mods||[]).forEach(m=>{const cls=m.p==="C"||m.p==="E"?"c":m.p==="X"?"x":"";const tag=it.kind==="unique"?"":`<span class="tag">${m.p==="P"?"P":m.p==="S"?"S":m.p==="C"?"Craft":m.p==="E"?"Enchant":"Frei"}</span>`;h+=`<li class="${cls}">${tag}${esc(m.t)}</li>`;});
+  (it.mods||[]).forEach(m=>{const cls=m.p==="C"||m.p==="E"?"c":m.p==="X"?"x":m.p==="F"?"f":"";const tag=m.p==="F"?`<span class="tag ftag">Foulborn</span>`:it.kind==="unique"?"":`<span class="tag">${m.p==="P"?"P":m.p==="S"?"S":m.p==="C"?"Craft":m.p==="E"?"Enchant":"Frei"}</span>`;h+=`<li class="${cls}">${tag}${esc(m.t)}</li>`;});
   if(!(it.mods||[]).length) h+=`<li class="x">Keine Mods festgelegt</li>`;
   h+=`</ul>`;
+  if(it.fo) h+=`<div class="fbnote">Foulborn-Mod ersetzt: ${esc(it.fo)}</div>`;
   if(it.kind==="unique"){const src=srcText(it.name);h+=`<div class="src ${src.legacy?"legacy":""}"><span>Quelle</span>${esc(src.t)}</div>`;}
   if(it.note) h+=`<div class="note">${esc(it.note)}</div>`;
   h+=`<footer>`;
@@ -720,7 +727,7 @@ function openEditor(ch,key){
   const existing=getItem(ch,key);
   const E={
     tab: existing&&existing.kind==="rare"?"rare":"unique",
-    uq:"", onlyRep:false, uSel: existing&&existing.kind==="unique"?existing.name:null,
+    uq:"", onlyRep:false, onlyFb:false, uSel: existing&&existing.kind==="unique"?existing.name:null,
     base: existing&&existing.kind==="rare"?existing.base:"", bq:"",
     inf: existing&&existing.inf?existing.inf.slice():[],
     mods: existing&&existing.kind==="rare"?clone(existing.mods).filter(m=>m.p!=="E"):[],
@@ -745,7 +752,7 @@ function openEditor(ch,key){
     if(E.tab==="unique"){
       const u=S.data.uniques.find(x=>x.n===E.uSel);
       if(!u){flash("Wähl zuerst ein Unique aus der Liste.");return;}
-      it={kind:"unique",name:u.n,base:u.b,replica:!!u.r,inf:[],mods:u.m.map(t=>({p:"U",t})),note:E.note,have:E.st==="have",offer:E.st==="offer"?otherPk(playerOf(fresh())):""};
+      it={kind:"unique",name:u.n,base:u.b,replica:!!u.r,foulborn:!!u.fb,fo:u.fo||"",inf:[],mods:uMods(u),note:E.note,have:E.st==="have",offer:E.st==="offer"?otherPk(playerOf(fresh())):""};
     }else{
       if(!E.base&&!E.mods.length){flash("Wähl eine Basis oder füg mindestens einen Mod hinzu.");return;}
       const b=S.data.baseBy[E.base];let mods=E.mods;let ctag="",cpass=0;
@@ -772,7 +779,7 @@ function openEditor(ch,key){
     const out=[];
     S.data.uniques.forEach(u=>{
       const ok=type==="offhand"?(u.s==="offhand"||u.s==="weapon"):u.s===type;
-      if(!ok)return;if(E.onlyRep&&!u.r)return;
+      if(!ok)return;if(E.onlyRep&&!u.r)return;if(E.onlyFb&&!u.fb)return;
       if(type==="jewel"&&E.jf!=="all"&&jewelKind(u.b)!==E.jf)return;
       if(!q){out.push([0,u]);return;}
       const f=fuzzy(q,u.n+" "+u.b);
@@ -783,26 +790,27 @@ function openEditor(ch,key){
     return out.sort((a,b)=>b[0]-a[0]||lg(a[1])-lg(b[1])).map(x=>x[1]);
   }
   function uniqueHtml(){
-    return `<div class="field" style="gap:8px"><div class="row"><input class="inp" id="uq" placeholder="Unique suchen, Name, Basis oder Mod (Tippfehler okay)" value="${esc(E.uq)}" style="flex:1 1 220px"><button class="chip" id="onlyrep" aria-pressed="${E.onlyRep}">Nur Replicas</button></div>${jfChips()}
+    return `<div class="field" style="gap:8px"><div class="row"><input class="inp" id="uq" placeholder="Unique suchen, Name, Basis oder Mod (Tippfehler okay)" value="${esc(E.uq)}" style="flex:1 1 220px"><button class="chip" id="onlyrep" aria-pressed="${E.onlyRep}">Nur Replicas</button><button class="chip" id="onlyfb" aria-pressed="${E.onlyFb}">Nur Foulborn</button></div>${jfChips()}
       <div class="list" id="ulist"></div><div class="hint" id="eflash"></div></div>
       <div class="preview" id="uprev"></div>`;
   }
   function bindUnique(){
     const uq=$("#uq");uq.oninput=()=>{E.uq=uq.value;drawUList();};
     $("#onlyrep").onclick=()=>{E.onlyRep=!E.onlyRep;$("#onlyrep").setAttribute("aria-pressed",E.onlyRep);drawUList();};
+    $("#onlyfb").onclick=()=>{E.onlyFb=!E.onlyFb;$("#onlyfb").setAttribute("aria-pressed",E.onlyFb);drawUList();};
     bindJf(drawUList);
     drawUList();drawUPrev();setTimeout(()=>uq.focus(),20);
   }
   function drawUList(){
     const L=uniqueList();const shown=L.slice(0,200);
-    $("#ulist").innerHTML=shown.length?shown.map(u=>`<button class="it ${u.n===E.uSel?"sel":""}" data-u="${esc(u.n)}"><span class="u">${esc(u.n)}</span>${u.r?`<span class="rp">Replica</span>`:""}<br><small>${esc(u.b)}</small><span class="lsrc ${u.src==="Nicht mehr erhältlich"?"legacy":""}">${esc(u.src||"Weltdrop")}</span></button>`).join("")+(L.length>200?`<div class="none">${L.length-200} weitere, Suche eingrenzen</div>`:""):`<div class="none">Nichts gefunden.</div>`;
+    $("#ulist").innerHTML=shown.length?shown.map(u=>`<button class="it ${u.n===E.uSel?"sel":""}" data-u="${esc(u.n)}"><span class="u">${esc(u.n)}</span>${u.r?`<span class="rp">Replica</span>`:""}${u.fb?`<span class="rp fbp">Foulborn</span>`:""}<br><small>${esc(u.b)}</small><span class="lsrc ${u.src==="Nicht mehr erhältlich"?"legacy":""}">${esc(u.src||"Weltdrop")}</span></button>`).join("")+(L.length>200?`<div class="none">${L.length-200} weitere, Suche eingrenzen</div>`:""):`<div class="none">Nichts gefunden.</div>`;
     document.querySelectorAll("[data-u]").forEach(b=>b.onclick=()=>{E.uSel=b.dataset.u;document.querySelectorAll("[data-u]").forEach(x=>x.classList.toggle("sel",x===b));drawUPrev();});
   }
   function drawUPrev(){
     const u=S.data.uniques.find(x=>x.n===E.uSel);
     let h=`<div class="lbl" style="margin-bottom:6px">Vorschau</div>`;
     if(!u) h+=`<div class="empty-note">Wähl links ein Unique aus.</div>`;
-    else h+=tipHtmlRaw({kind:"unique",name:u.n,base:u.b,mods:u.m.map(t=>({p:"U",t}))},slotLabel(key));
+    else h+=tipHtmlRaw({kind:"unique",name:u.n,base:u.b,fo:u.fo||"",mods:uMods(u)},slotLabel(key));
     h+=noteFields();
     $("#uprev").innerHTML=h;bindNote();
   }
